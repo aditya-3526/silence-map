@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Spectral:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;height:100%;background:#0a0a0f}
+  body{font-family:'IBM Plex Sans',system-ui,sans-serif;color:#e8e6e0;-webkit-font-smoothing:antialiased}
+  ::-webkit-scrollbar{width:8px;height:8px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.09)}
+  @keyframes scpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.7)}}
+  @keyframes scdraw{from{stroke-dashoffset:1300}to{stroke-dashoffset:0}}
+  @keyframes scfade{from{opacity:0}to{opacity:1}}
+  @keyframes scup{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
+  input[type=range].scrub{-webkit-appearance:none;appearance:none;width:100%;background:transparent;cursor:pointer;height:14px}
+  input[type=range].scrub::-webkit-slider-runnable-track{height:2px;background:rgba(255,255,255,0.14)}
+  input[type=range].scrub::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:11px;height:11px;margin-top:-5px;background:#e8e6e0;border-radius:50%}
+  input[type=range].scrub::-moz-range-track{height:2px;background:rgba(255,255,255,0.14)}
+  input[type=range].scrub::-moz-range-thumb{width:11px;height:11px;border:none;background:#e8e6e0;border-radius:50%}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
+</helmet>
+
+<div style="display:flex;flex-direction:column;height:100vh;overflow:hidden;background:#0a0a0f">
+
+  <header style="flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 24px;height:54px;border-bottom:1px solid rgba(255,255,255,0.07)">
+    <div style="display:flex;align-items:baseline;gap:14px">
+      <div style="font-family:'Spectral',serif;font-weight:600;font-size:19px;letter-spacing:-0.01em;color:#f2f0ea">SilenceMap</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:#5e5e6c">Global news-silence tracker</div>
+    </div>
+    <nav style="display:flex;align-items:center;gap:22px;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:0.1em;text-transform:uppercase">
+      <span style="display:flex;align-items:center;gap:7px;color:#e8e6e0"><span style="width:6px;height:6px;border-radius:50%;background:#ff2200;animation:scpulse 1.6s ease-in-out infinite"></span>Live</span>
+      <span style="color:#6a6a78">Method</span>
+      <span style="color:#6a6a78">Sources</span>
+      <span style="color:#6a6a78">About</span>
+    </nav>
+  </header>
+
+  <div style="flex:none;display:flex;align-items:stretch;height:62px;border-bottom:1px solid rgba(255,255,255,0.07);background:#0c0c12">
+    <div style="flex:none;display:flex;align-items:center;padding:0 18px;border-right:1px solid rgba(255,255,255,0.07);font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:#8a8a96;line-height:1.3;max-width:120px">Today's<br>5 silences</div>
+    <div style="flex:1;display:flex;align-items:stretch;overflow:hidden">
+      <sc-for list="{{ silences }}" as="s" hint-placeholder-count="5">
+        <div onClick="{{ s.onSelect }}" style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:3px;padding:0 18px;border-right:1px solid rgba(255,255,255,0.05);cursor:pointer;min-width:0" style-hover="background:rgba(255,255,255,0.025)">
+          <div style="display:flex;align-items:center;gap:8px;min-width:0">
+            <span style="flex:none;width:7px;height:7px;border-radius:50%;background:{{ s.color }};animation:scpulse 1.8s ease-in-out infinite"></span>
+            <span style="font-family:'Spectral',serif;font-size:14px;font-weight:500;color:#f0eee8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.name }}</span>
+          </div>
+          <div style="font-size:11px;color:#7e7e8a;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-left:15px">{{ s.desc }}</div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <div style="position:relative;flex:1;overflow:hidden" data-screen-label="Globe view">
+
+    <div style="position:absolute;top:0;left:0;bottom:0;right:{{ globeRight }};transition:right .3s ease-out">
+      <canvas ref="{{ canvasRef }}" style="display:block;width:100%;height:100%;cursor:grab"></canvas>
+      <div ref="{{ tooltipRef }}" style="position:absolute;display:none;transform:translate(14px,-50%);pointer-events:none;background:rgba(10,10,16,0.94);border:1px solid rgba(255,255,255,0.12);padding:7px 10px;z-index:6;white-space:nowrap"></div>
+
+      <sc-if value="{{ archiveClosed }}" hint-placeholder-val="{{ true }}">
+        <div style="position:absolute;left:24px;bottom:104px;z-index:4">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:0.14em;text-transform:uppercase;color:#5e5e6c;margin-bottom:8px">Silence intensity</div>
+          <div style="display:flex;gap:0">
+            <span style="width:26px;height:8px;background:#1a1a2e"></span>
+            <span style="width:26px;height:8px;background:#4a3800"></span>
+            <span style="width:26px;height:8px;background:#8b5e00"></span>
+            <span style="width:26px;height:8px;background:#c47800"></span>
+            <span style="width:26px;height:8px;background:#e85d00"></span>
+            <span style="width:26px;height:8px;background:#ff2200"></span>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:6px;font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:0.08em;text-transform:uppercase;color:#5e5e6c"><span>None</span><span>Suppression</span></div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ panelClosed }}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute;left:50%;bottom:104px;transform:translateX(-50%);font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:0.16em;text-transform:uppercase;color:#42424e;z-index:3">Drag to rotate · click a pulsing marker</div>
+      </sc-if>
+    </div>
+
+    <aside data-screen-label="Region panel" style="position:absolute;top:0;right:0;bottom:0;width:35%;min-width:380px;transform:translateX({{ panelTx }});transition:transform .3s ease-out;background:#0c0c12;border-left:1px solid rgba(255,255,255,0.09);overflow-y:auto;z-index:8;box-shadow:-24px 0 50px rgba(0,0,0,0.35)">
+
+      <div style="padding:22px 24px 18px;border-bottom:1px solid rgba(255,255,255,0.07)">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+          <div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:#7e7e8a;margin-bottom:6px">{{ sel.country }} · {{ sel.coords }}</div>
+            <h2 style="margin:0;font-family:'Spectral',serif;font-weight:600;font-size:27px;line-height:1.05;color:#f4f2ec">{{ sel.name }}</h2>
+          </div>
+          <button onClick="{{ closePanel }}" style="flex:none;width:30px;height:30px;display:flex;align-items:center;justify-content:center;background:transparent;border:1px solid rgba(255,255,255,0.12);color:#9a9aa6;font-size:15px;cursor:pointer;line-height:1" style-hover="background:rgba(255,255,255,0.05);color:#e8e6e0">✕</button>
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:12px;margin-top:18px">
+          <div style="font-family:'Spectral',serif;font-weight:600;font-size:44px;line-height:0.85;color:{{ sel.color }}">{{ sel.score }}</div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:#7e7e8a;padding-bottom:4px;line-height:1.4">Silence index<br>/ 100</div>
+        </div>
+      </div>
+
+      <section style="padding:22px 24px;border-bottom:1px solid rgba(255,255,255,0.06)">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:#8a8a96;margin-bottom:14px">What's happening</div>
+        <div style="display:flex;gap:0;margin-bottom:16px;border:1px solid rgba(255,255,255,0.07)">
+          <div style="flex:1;padding:10px 12px;border-right:1px solid rgba(255,255,255,0.07)">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:#6a6a78;margin-bottom:5px">Event</div>
+            <div style="font-size:12px;color:#e0ded6;line-height:1.25">{{ sel.happening.type }}</div>
+          </div>
+          <div style="flex:none;width:84px;padding:10px 12px;border-right:1px solid rgba(255,255,255,0.07)">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:#6a6a78;margin-bottom:5px">Severity</div>
+            <div style="font-size:12px;color:{{ sel.color }};line-height:1.25">{{ sel.happening.severity }}</div>
+          </div>
+          <div style="flex:none;width:124px;padding:10px 12px">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:#6a6a78;margin-bottom:5px">Affected</div>
+            <div style="font-size:12px;color:#e0ded6;line-height:1.25">{{ sel.happening.population }}</div>
+          </div>
+        </div>
+        <p style="margin:0 0 14px;font-family:'Spectral',serif;font-size:15px;line-height:1.55;color:#cac8c0;text-wrap:pretty">{{ sel.happening.summary }}</p>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          <sc-for list="{{ sel.happening.sources }}" as="src" hint-placeholder-count="3">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:0.08em;text-transform:uppercase;color:#9a9aa6;border:1px solid rgba(255,255,255,0.12);padding:3px 7px">{{ src }}</span>
+          </sc-for>
+        </div>
+      </section>
+
+      <section style="padding:22px 24px;border-bottom:1px solid rgba(255,255,255,0.06)">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:16px">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:#8a8a96">Mainstream coverage</div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:0.08em;text-transform:uppercase;color:#5e5e6c">Stories / day · 30d</div>
+        </div>
+        <svg viewBox="0 0 320 60" width="100%" height="58" preserveAspectRatio="none" style="display:block;overflow:visible">
+          <line x1="0" y1="56" x2="320" y2="56" stroke="rgba(255,255,255,0.10)" stroke-width="1"></line>
+          <polyline points="{{ sel.sparkPoints }}" fill="none" stroke="{{ sel.color }}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" style="stroke-dasharray:1300;animation:scdraw 1s ease-out forwards"></polyline>
+        </svg>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:12px">
+          <span style="flex:none;width:6px;height:6px;background:{{ sel.color }}"></span>
+          <span style="font-size:12px;color:#a8a6a0;line-height:1.4">{{ sel.coverageCaption }}</span>
+        </div>
+      </section>
+
+      <section style="padding:22px 24px;border-bottom:1px solid rgba(255,255,255,0.06)">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:#8a8a96;margin-bottom:14px">What other sources say</div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <sc-for list="{{ sel.sources }}" as="source" hint-placeholder-count="5">
+            <div style="border-left:2px solid {{ source.color }};background:rgba(255,255,255,0.018);padding:11px 13px">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px">
+                <span style="font-size:13px;font-weight:600;color:#eceae4">{{ source.name }}</span>
+                <span style="flex:none;color:#6a6a78;font-size:13px">↗</span>
+              </div>
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:0.07em;text-transform:uppercase;color:#6a6a78;margin-bottom:7px">{{ source.type }} · {{ source.date }}</div>
+              <div style="font-family:'Spectral',serif;font-size:13.5px;line-height:1.45;color:#b8b6b0;text-wrap:pretty">{{ source.summary }}</div>
+            </div>
+          </sc-for>
+        </div>
+      </section>
+
+      <section style="padding:22px 24px;border-bottom:1px solid rgba(255,255,255,0.06)">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:#8a8a96;margin-bottom:14px">Why the silence</div>
+        <div style="display:inline-flex;align-items:center;gap:8px;padding:7px 12px;margin-bottom:13px;color:{{ sel.classStyle.color }};background:{{ sel.classStyle.background }};border:{{ sel.classStyle.border }}">
+          <span style="width:7px;height:7px;border-radius:50%;background:currentColor"></span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:0.1em;text-transform:uppercase">{{ sel.classLabel }}</span>
+        </div>
+        <p style="margin:0;font-family:'Spectral',serif;font-size:14px;line-height:1.55;color:#bcbab4;text-wrap:pretty">{{ sel.classText }}</p>
+      </section>
+
+      <div style="padding:18px 24px 26px">
+        <button onClick="{{ openMutation }}" style="width:100%;display:flex;align-items:center;justify-content:center;gap:8px;padding:13px;background:transparent;border:1px solid rgba(255,255,255,0.16);color:#e8e6e0;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;cursor:pointer" style-hover="background:rgba(255,255,255,0.04);border-color:rgba(255,255,255,0.3)">Trace this story's mutation →</button>
+      </div>
+
+    </aside>
+
+    <div style="position:absolute;left:0;bottom:0;right:{{ scrubRight }};transition:right .3s ease-out;padding:16px 28px 18px;background:linear-gradient(to top,rgba(10,10,15,0.92),rgba(10,10,15,0));z-index:5">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:0.12em;text-transform:uppercase">
+        <span style="color:#5e5e6c">3 yrs ago</span>
+        <span style="color:#e8e6e0;letter-spacing:0.1em">{{ archiveLabel }}</span>
+        <span style="color:#5e5e6c">Today</span>
+      </div>
+      <input type="range" class="scrub" min="0" max="36" value="{{ archiveMonths }}" onInput="{{ onScrub }}">
+    </div>
+
+    <sc-if value="{{ archiveOpen }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Archive" style="position:absolute;left:24px;bottom:96px;width:392px;max-width:calc(100% - 48px);background:#0d0d14;border:1px solid rgba(255,255,255,0.1);z-index:7;animation:scup .3s ease-out">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid rgba(255,255,255,0.07)">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:#8a8a96">Notable silences · {{ archiveLabel }}</div>
+          <button onClick="{{ closeArchive }}" style="background:transparent;border:none;color:#7e7e8a;font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:0.1em;text-transform:uppercase;cursor:pointer" style-hover="color:#e8e6e0">Return to present ✕</button>
+        </div>
+        <div style="display:flex;flex-direction:column">
+          <sc-for list="{{ archiveCards }}" as="a" hint-placeholder-count="3">
+            <div style="padding:14px 16px;border-bottom:1px solid rgba(255,255,255,0.05);border-left:2px solid {{ a.color }}">
+              <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:3px">
+                <span style="font-family:'Spectral',serif;font-size:15px;font-weight:500;color:#f0eee8">{{ a.region }}</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:0.08em;text-transform:uppercase;color:#6a6a78">{{ a.dates }}</span>
+              </div>
+              <div style="font-size:12px;color:#a8a6a0;line-height:1.4;margin-bottom:8px">{{ a.event }}</div>
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.04em;color:{{ a.color }}">{{ a.gap }}</div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ mutationOpen }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Mutation tracker" style="position:absolute;inset:0;z-index:20;background:rgba(8,8,12,0.985);display:flex;flex-direction:column;animation:scfade .25s ease-out">
+        <div style="flex:none;display:flex;align-items:flex-start;justify-content:space-between;padding:26px 32px 20px;border-bottom:1px solid rgba(255,255,255,0.08)">
+          <div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:#7e7e8a;margin-bottom:8px">Story mutation trace · {{ sel.name }}</div>
+            <h2 style="margin:0;font-family:'Spectral',serif;font-weight:600;font-size:25px;color:#f4f2ec">{{ sel.mutation.story }}</h2>
+          </div>
+          <button onClick="{{ closeMutation }}" style="flex:none;width:34px;height:34px;display:flex;align-items:center;justify-content:center;background:transparent;border:1px solid rgba(255,255,255,0.14);color:#9a9aa6;font-size:16px;cursor:pointer" style-hover="background:rgba(255,255,255,0.05);color:#e8e6e0">✕</button>
+        </div>
+
+        <div style="flex:1;overflow:auto;padding:34px 32px">
+          <div style="display:flex;align-items:stretch;gap:0;max-width:1180px;margin:0 auto">
+            <sc-for list="{{ sel.mutation.stops }}" as="stop" hint-placeholder-count="3">
+              <div style="flex:1;display:flex;flex-direction:column;min-width:0">
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+                  <span style="flex:none;font-family:'IBM Plex Mono',monospace;font-size:11px;color:{{ stop.tierColor }}">{{ stop.idx }}</span>
+                  <span style="flex:none;width:9px;height:9px;border-radius:50%;background:{{ stop.tierColor }}"></span>
+                  <span style="flex:1;height:1px;background:rgba(255,255,255,0.12)"></span>
+                </div>
+                <div style="padding-right:22px">
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:0.12em;text-transform:uppercase;color:{{ stop.tierColor }};margin-bottom:10px">{{ stop.tier }}</div>
+                  <div style="font-size:14px;font-weight:600;color:#eceae4;margin-bottom:2px">{{ stop.source }}</div>
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:0.07em;text-transform:uppercase;color:#6a6a78;margin-bottom:14px">{{ stop.date }}</div>
+                  <p style="margin:0;font-family:'Spectral',serif;font-size:16px;line-height:1.6;color:#c6c4bc;text-wrap:pretty">
+                    <sc-for list="{{ stop.segments }}" as="seg" hint-placeholder-count="3"><span style="{{ seg.style }}">{{ seg.text }}</span></sc-for>
+                  </p>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="max-width:1180px;margin:40px auto 0;border-top:1px solid rgba(255,255,255,0.08);padding-top:24px">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:#8a8a96;margin-bottom:16px">What changed</div>
+            <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px 40px;max-width:880px">
+              <sc-for list="{{ sel.mutation.summary }}" as="line" hint-placeholder-count="4">
+                <div style="display:flex;gap:11px;align-items:flex-start">
+                  <span style="flex:none;margin-top:7px;width:5px;height:5px;background:#e8a23a"></span>
+                  <span style="font-size:13.5px;line-height:1.5;color:#bcbab4">{{ line.text }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  constructor(props){
+    super(props);
+    this.state = { selectedId:'tigray', panelOpen:true, mutationOpen:false, archiveOpen:false, archiveMonths:0 };
+    this.canvasRef = React.createRef();
+    this.tooltipRef = React.createRef();
+    this.rotation = [-30, -14];
+    this.autoRotate = true;
+    this.dragging = false;
+    this.time = 0;
+    this.DB = this.buildDB();
+    this.byCountry = {};
+    for (const r of this.DB) this.byCountry[r.countryId] = r;
+    this.loop = this.loop.bind(this);
+  }
+
+  buildDB(){
+    return [
+      { id:'tigray', name:'Tigray, Ethiopia', country:'Ethiopia', countryId:'231', lon:39.2, lat:13.8, color:'#e85d00', score:94,
+        banner:'Renewed clashes displace half a million; near-total media blackout',
+        happening:{ type:'Armed clashes & displacement', severity:'Severe', population:'≈512,000 newly displaced',
+          summary:`Renewed fighting between regional forces and allied militias has spread across eastern Tigray since early March. Verified events include shelling of populated areas, blocked aid convoys, and the collapse of health services in three woredas. Food assistance has not reached the worst-affected districts in over six weeks.`,
+          sources:['ACLED','GDACS','ReliefWeb','OCHA'] },
+        coverage:this.genCov(7,[[9,4],[24,2]]),
+        sources:[
+          { name:'Addis Standard', type:'Local outlet', date:'Jun 17', summary:`Residents in Adigrat describe nightly shelling and a cash shortage as banks stay shut.` },
+          { name:'Tigrai Media House', type:'Local broadcaster', date:'Jun 16', summary:`Reports three rural clinics out of service after generator fuel ran out.` },
+          { name:'OCHA Ethiopia', type:'UN situation report', date:'Jun 15', summary:`Estimates 512,000 newly displaced; humanitarian access "severely constrained" in the east.` },
+          { name:'Ethiopia Peace Observatory', type:'ACLED partner', date:'Jun 14', summary:`Logs 38 violent events in two weeks — the highest fortnightly count since 2022.` },
+          { name:'Médecins Sans Frontières', type:'NGO field update', date:'Jun 12', summary:`Suspends operations in two districts citing staff safety and supply blockages.` },
+          { name:'UNHCR Flash Update', type:'Machine-translated', date:'Jun 11', summary:`Cross-border arrivals into Sudan rising despite insecurity along the route.` } ],
+        classification:{ type:'Structural', text:`Coverage is absent because the infrastructure to report it isn't there — no foreign bureaus, restricted travel, and intermittent communications. The silence is a byproduct of access, not an editorial choice.` },
+        mutation:{ story:'Reported shelling in Adigrat — June 14', summary:[
+            {text:'"At least 47 civilians" collapses to "dozens," then disappears entirely.'},
+            {text:'Named location "Adigrat market" widens to "northern Ethiopia."'},
+            {text:'"Artillery struck" — a weapon and an actor — becomes "violence flared."'},
+            {text:'Child and clinic-staff victims present locally are gone by the third version.'} ],
+          stops:[
+            { tier:'Local source', source:'Tigrai Television', date:'Jun 14', segments:[
+              {t:'Artillery struck the Adigrat central market',m:1},{t:', killing '},{t:'at least 47 civilians',m:1},{t:' including '},{t:'nine children',m:1},{t:', residents and two clinic staff said.'} ] },
+            { tier:'Regional wire', source:'Pan-African News Wire', date:'Jun 15', segments:[
+              {t:'Clashes reportedly killed dozens',m:1},{t:' in northern Tigray on Saturday, '},{t:'according to unverified local accounts',m:1},{t:'.'} ] },
+            { tier:'International outlet', source:'Global desk brief', date:'Jun 16', segments:[
+              {t:'Violence flared in northern Ethiopia',m:1},{t:' amid '},{t:'renewed tensions between rival forces',m:1},{t:', officials said.'} ] } ] } },
+
+      { id:'baloch', name:'Balochistan, Pakistan', country:'Pakistan', countryId:'586', lon:65.5, lat:28.2, color:'#ff2200', score:88,
+        banner:'Enforced disappearances surge as connectivity stays throttled',
+        happening:{ type:'Enforced disappearances & unrest', severity:'High', population:'≈1,900 cases logged in 2026',
+          summary:`Rights monitors report a sharp rise in enforced disappearances and night raids across Makran and Kech since April, alongside an internet slowdown now in its 18th day. Independent journalists are largely barred from the province.`,
+          sources:['ACLED','ReliefWeb'] },
+        coverage:this.genCov(13,[[18,2]]),
+        sources:[
+          { name:'The Balochistan Post', type:'Local · translated', date:'Jun 16', summary:`Families stage a sit-in in Turbat over relatives missing since a May raid.` },
+          { name:'HRC of Balochistan', type:'NGO monitor', date:'Jun 15', summary:`Documents 214 new disappearance cases this quarter, most unreported elsewhere.` },
+          { name:'NetBlocks', type:'Connectivity monitor', date:'Jun 14', summary:`Confirms reduced connectivity across Makran for an 18th consecutive day.` },
+          { name:'Voice for Baloch Missing Persons', type:'Advocacy group', date:'Jun 12', summary:`Publishes names of 31 detainees said to be held without charge.` },
+          { name:'ACLED South Asia', type:'Conflict data', date:'Jun 10', summary:`Records a cluster of night-time security operations around Kech.` } ],
+        classification:{ type:'Suppression signal', text:`Reporting is being actively impeded — independent journalists barred, connectivity throttled, families intimidated. The pattern is consistent with deliberate information control and warrants close scrutiny.` },
+        mutation:{ story:'Reported night raid in Turbat — May 28', summary:[
+            {text:'"14 men, including a 16-year-old" softens to "several people."'},
+            {text:'"Detained" becomes "picked up," then a neutral "security operation."'},
+            {text:'Named detainees become anonymous "sources said."'},
+            {text:'Frame shifts to a "restive region" defined by "insurgency."'} ],
+          stops:[
+            { tier:'Local source', source:'The Balochistan Post', date:'May 28', segments:[
+              {t:'Security forces detained 14 men',m:1},{t:' in a pre-dawn raid on a Turbat neighbourhood, '},{t:'including a 16-year-old student',m:1},{t:', families said.'} ] },
+            { tier:'Regional wire', source:'National daily, Karachi', date:'May 30', segments:[
+              {t:'Several people were picked up',m:1},{t:' during a '},{t:'security operation',m:1},{t:' in Balochistan, sources said.'} ] },
+            { tier:'International outlet', source:'Wire brief', date:'Jun 02', segments:[
+              {t:'Pakistani forces conducted operations',m:1},{t:" in the country's restive southwest "},{t:'amid a long-running insurgency',m:1},{t:'.'} ] } ] } },
+
+      { id:'westpapua', name:'West Papua, Indonesia', country:'Indonesia', countryId:'360', lon:138.0, lat:-4.0, color:'#c47800', score:79,
+        banner:'Highland offensive widens with foreign press still barred',
+        happening:{ type:'Highland military operation', severity:'High', population:'≈61,000 displaced since 2023',
+          summary:`A renewed offensive in the central highlands has displaced thousands more from Nduga and Intan Jaya. Foreign journalists remain barred from the region, leaving church networks as the main source of casualty reporting.`,
+          sources:['ACLED','ReliefWeb'] },
+        coverage:this.genCov(21,[[5,2],[12,1]]),
+        sources:[
+          { name:'Jubi', type:'Local · translated', date:'Jun 15', summary:`Reports fresh displacement from two highland villages after an air operation.` },
+          { name:'Papua Church Council', type:'Faith network', date:'Jun 13', summary:`Says at least 4,000 people are sheltering in forest and church compounds.` },
+          { name:'Human Rights Monitor', type:'NGO', date:'Jun 11', summary:`Verifies two civilian deaths via geolocated footage.` },
+          { name:'ULMWP situation note', type:'Advocacy', date:'Jun 09', summary:`Calls for humanitarian access to the central highlands.` },
+          { name:'Amnesty Indonesia', type:'NGO', date:'Jun 07', summary:`Reiterates concern that the press ban limits independent verification.` } ],
+        classification:{ type:'Editorial', text:`The story is reachable through proxies but consistently deprioritized — judged too remote, too complex, or too costly to cover against competing news. The silence is a product of newsroom choices.` },
+        mutation:{ story:'Highland air operation — June 09', summary:[
+            {text:'A named "air strike on Kiwirok" becomes a generic "security operation."'},
+            {text:'"Around 800 residents fleeing" is dropped from the wire version.'},
+            {text:'Official framing — "armed criminal groups" / "separatists" — is adopted wholesale.'},
+            {text:'Location degrades from a village to a "remote eastern region."'} ],
+          stops:[
+            { tier:'Local source', source:'Jubi', date:'Jun 09', segments:[
+              {t:'An air strike hit Kiwirok village',m:1},{t:', forcing '},{t:'around 800 residents',m:1},{t:' to flee, church workers said.'} ] },
+            { tier:'Regional wire', source:'Jakarta outlet', date:'Jun 11', segments:[
+              {t:'A security operation was carried out',m:1},{t:" in Papua's highlands "},{t:'to pursue armed criminal groups',m:1},{t:', the military said.'} ] },
+            { tier:'International outlet', source:'Wire brief', date:'Jun 13', segments:[
+              {t:'Indonesian forces clashed with separatists',m:1},{t:' in a '},{t:'remote eastern region',m:1},{t:'.'} ] } ] } },
+
+      { id:'cabo', name:'Cabo Delgado, Mozambique', country:'Mozambique', countryId:'508', lon:39.8, lat:-12.2, color:'#8b5e00', score:72,
+        banner:'Coastal insurgent raids resume; the aid road is shut again',
+        happening:{ type:'Insurgent raids', severity:'High', population:'≈74,000 displaced this quarter',
+          summary:`Attacks attributed to an Islamist insurgency have resumed along the Cabo Delgado coast, hitting Macomia and Quissanga districts. Aid agencies have again suspended movement on the main coastal road.`,
+          sources:['ACLED','GDACS','ReliefWeb'] },
+        coverage:this.genCov(29,[[16,3]]),
+        sources:[
+          { name:'Cabo Ligado', type:'Conflict monitor', date:'Jun 16', summary:`Maps six attacks in two weeks, concentrated around Macomia.` },
+          { name:'Pinnacle News', type:'Local · translated', date:'Jun 14', summary:`Residents flee Quissanga after an overnight raid on the district seat.` },
+          { name:'OCHA Mozambique', type:'UN situation report', date:'Jun 13', summary:`Reports 74,000 displaced this quarter; coastal road movement suspended.` },
+          { name:'Save the Children', type:'NGO field update', date:'Jun 11', summary:`Warns of rising acute malnutrition among newly displaced children.` },
+          { name:'IOM DTM', type:'Displacement tracking', date:'Jun 09', summary:`Records new arrivals in Pemba reception sites.` } ],
+        classification:{ type:'Displaced', text:`Coverage exists but has moved on — attention spiked during an earlier phase of this conflict and never returned as conditions worsened. The silence is the gap left by a news cycle that already closed.` },
+        mutation:{ story:'Quissanga raid — June 13', summary:[
+            {text:'"At least 9 beheaded" reduces to "a number of people dead."'},
+            {text:'The method and the atrocity detail vanish in regional retelling.'},
+            {text:'A named town becomes "northern Mozambique."'},
+            {text:'Attribution narrows to vague "violence linked to an insurgency."'} ],
+          stops:[
+            { tier:'Local source', source:'Pinnacle News', date:'Jun 13', segments:[
+              {t:'Insurgents beheaded at least 9 people',m:1},{t:' and burned the '},{t:'district administration in Quissanga',m:1},{t:', survivors said.'} ] },
+            { tier:'Regional wire', source:'Maputo daily', date:'Jun 15', segments:[
+              {t:'Suspected militants killed several people',m:1},{t:' in an attack in northern Mozambique, '},{t:'officials confirmed',m:1},{t:'.'} ] },
+            { tier:'International outlet', source:'Wire brief', date:'Jun 17', segments:[
+              {t:'Violence linked to an insurgency',m:1},{t:' left '},{t:'a number of people dead',m:1},{t:" in Mozambique's north."} ] } ] } },
+
+      { id:'kivu', name:'North Kivu, DR Congo', country:'Dem. Rep. Congo', countryId:'180', lon:29.0, lat:-1.2, color:'#c47800', score:83,
+        banner:'Armed advance severs the main humanitarian corridor north of Goma',
+        happening:{ type:'Armed offensive & blockade', severity:'Severe', population:'≈2.8M displaced in province',
+          summary:`An armed-group advance has cut a key humanitarian corridor north of Goma, stranding aid and civilians. Frontline shifts have repeatedly closed the main supply road over the past month.`,
+          sources:['ACLED','GDACS','ReliefWeb','OCHA'] },
+        coverage:this.genCov(3,[[7,3],[20,2]]),
+        sources:[
+          { name:'Actualité.cd', type:'Local · translated', date:'Jun 17', summary:`Reports the Kanyabayonga axis closed for a fourth time this month.` },
+          { name:'OCHA DRC', type:'UN situation report', date:'Jun 15', summary:`Says aid to northern Rutshuru is "effectively cut" by frontline movement.` },
+          { name:'Kivu Security Tracker', type:'Conflict monitor', date:'Jun 14', summary:`Logs clashes along the Goma–Butembo road corridor.` },
+          { name:'Norwegian Refugee Council', type:'NGO', date:'Jun 12', summary:`Suspends distributions in two sites citing access and security.` },
+          { name:'MSF', type:'NGO field update', date:'Jun 10', summary:`Reports a surge of wounded arriving at a Goma-area hospital.` } ],
+        classification:{ type:'Structural', text:`The fighting is reachable but the reporting capacity isn't — shifting front lines, severed roads, and few resident correspondents leave verification slow and partial. The silence tracks the collapse of access.` },
+        mutation:{ story:'Kanyabayonga shelling — June 14', summary:[
+            {text:'"12 civilians killed by shelling of a camp" becomes "casualties reported."'},
+            {text:'The perpetrator and the weapon both drop out of the wire copy.'},
+            {text:'A displacement camp dissolves into "an area hosting displaced people."'},
+            {text:'The event is finally reduced to a "complex conflict."'} ],
+          stops:[
+            { tier:'Local source', source:'Actualité.cd', date:'Jun 14', segments:[
+              {t:'Shells hit a displacement camp',m:1},{t:' near Kanyabayonga, '},{t:'killing 12 civilians',m:1},{t:', local officials said.'} ] },
+            { tier:'Regional wire', source:'Regional wire', date:'Jun 15', segments:[
+              {t:'Fighting reached an area hosting displaced people',m:1},{t:', with '},{t:'casualties reported',m:1},{t:'.'} ] },
+            { tier:'International outlet', source:'Wire brief', date:'Jun 16', segments:[
+              {t:'Renewed clashes in eastern Congo',m:1},{t:' displaced more people '},{t:'amid a complex conflict',m:1},{t:'.'} ] } ] } }
+    ];
+  }
+
+  genCov(seed, peaks){
+    const a=[]; let s=seed;
+    for(let i=0;i<30;i++){ s=(s*9301+49297)%233280; const r=s/233280; a.push(r<0.80?0:(r<0.94?1:2)); }
+    for(const [idx,h] of peaks) a[idx]=h;
+    return a;
+  }
+
+  componentDidMount(){ this.initGlobe(); }
+  async initGlobe(){
+    await this.waitFor(()=>this.canvasRef.current, 6000);
+    const c=this.canvasRef.current; if(!c) return;
+    this.attach(c);
+    this.loadGlobe();
+    this.raf=requestAnimationFrame(this.loop);
+  }
+  componentWillUnmount(){ cancelAnimationFrame(this.raf); }
+
+  loop(){
+    this.time=performance.now();
+    if(this.autoRotate && !this.dragging) this.rotation[0]+=0.12;
+    try{ this.draw(); }catch(e){ /* keep the animation loop alive */ }
+    this.raf=requestAnimationFrame(this.loop);
+  }
+
+  waitFor(fn,timeout){
+    return new Promise(res=>{ const t0=Date.now(); const tick=()=>{ if(fn()||Date.now()-t0>timeout) return res(); setTimeout(tick,60); }; tick(); });
+  }
+  async loadGlobe(){
+    await this.waitFor(()=>window.d3 && window.topojson, 9000);
+    if(!window.d3 || !window.topojson) return;
+    try{
+      const w=await fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json').then(r=>r.json());
+      this.countries=window.topojson.feature(w,w.objects.countries).features;
+      this.borders=window.topojson.mesh(w,w.objects.countries,(a,b)=>a!==b);
+    }catch(e){ /* land is an enhancement; globe still draws */ }
+  }
+
+  hexA(hex,a){ const n=parseInt(hex.slice(1),16); return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`; }
+
+  draw(){
+    const c=this.canvasRef.current; if(!c||!window.d3) return;
+    const dpr=Math.min(2,window.devicePixelRatio||1);
+    const w=c.clientWidth, h=c.clientHeight; if(!w||!h) return;
+    if(c.width!==Math.round(w*dpr)){ c.width=Math.round(w*dpr); c.height=Math.round(h*dpr); }
+    const ctx=c.getContext('2d'); ctx.save(); ctx.scale(dpr,dpr); ctx.clearRect(0,0,w,h);
+    const d3=window.d3;
+    const R=Math.min(w,h)/2 - 30;
+    const proj=d3.geoOrthographic().translate([w/2,h/2]).scale(R).rotate(this.rotation).clipAngle(90);
+    const path=d3.geoPath(proj,ctx);
+    ctx.beginPath(); path({type:'Sphere'}); ctx.fillStyle='#0c0c15'; ctx.fill();
+    ctx.beginPath(); path(d3.geoGraticule10()); ctx.lineWidth=0.5; ctx.strokeStyle='rgba(120,130,165,0.055)'; ctx.stroke();
+    if(this.countries){
+      for(const f of this.countries){ ctx.beginPath(); path(f); const r=this.byCountry[f.id]; ctx.fillStyle=r?this.hexA(r.color,0.16):'#16161f'; ctx.fill(); }
+      ctx.beginPath(); path(this.borders); ctx.lineWidth=0.5; ctx.strokeStyle='rgba(145,155,175,0.11)'; ctx.stroke();
+    }
+    ctx.beginPath(); path({type:'Sphere'}); ctx.lineWidth=1; ctx.strokeStyle='rgba(160,170,205,0.13)'; ctx.stroke();
+    const center=[-this.rotation[0],-this.rotation[1]];
+    for(const r of this.DB){
+      const dist=d3.geoDistance([r.lon,r.lat],center);
+      if(dist>Math.PI/2){ r._screen=null; continue; }
+      const p=proj([r.lon,r.lat]); r._screen=p; this.marker(ctx,p,r);
+    }
+    ctx.restore();
+  }
+
+  marker(ctx,p,r){
+    const sel=r.id===this.state.selectedId;
+    const ph=(Math.sin(this.time/620 + r.lon)+1)/2;
+    ctx.beginPath(); ctx.arc(p[0],p[1],7+ph*12,0,2*Math.PI); ctx.strokeStyle=this.hexA(r.color,0.05+0.22*(1-ph)); ctx.lineWidth=1.2; ctx.stroke();
+    if(sel){ ctx.beginPath(); ctx.arc(p[0],p[1],14,0,2*Math.PI); ctx.strokeStyle=this.hexA(r.color,0.9); ctx.lineWidth=1.5; ctx.stroke(); }
+    ctx.beginPath(); ctx.arc(p[0],p[1],3.6,0,2*Math.PI); ctx.fillStyle=r.color; ctx.fill();
+    ctx.lineWidth=1; ctx.strokeStyle='rgba(0,0,0,0.55)'; ctx.stroke();
+  }
+
+  regionAt(ox,oy){ let best=null,bd=18; for(const r of this.DB){ if(!r._screen) continue; const d=Math.hypot(r._screen[0]-ox,r._screen[1]-oy); if(d<bd){ bd=d; best=r; } } return best; }
+
+  attach(c){
+    c.addEventListener('pointerenter',()=>{ this.autoRotate=false; });
+    c.addEventListener('pointerleave',()=>{ this.autoRotate=true; this.dragging=false; this.hideTip(); c.style.cursor='grab'; });
+    c.addEventListener('pointerdown',(e)=>{ this.dragging=true; this.moved=0; this.lastX=e.clientX; this.lastY=e.clientY; try{c.setPointerCapture(e.pointerId);}catch(_){ } c.style.cursor='grabbing'; });
+    c.addEventListener('pointermove',(e)=>{
+      const rect=c.getBoundingClientRect(); const ox=e.clientX-rect.left, oy=e.clientY-rect.top;
+      if(this.dragging){
+        const dx=e.clientX-this.lastX, dy=e.clientY-this.lastY; this.lastX=e.clientX; this.lastY=e.clientY;
+        this.moved+=Math.abs(dx)+Math.abs(dy);
+        this.rotation[0]+=dx*0.25; this.rotation[1]=Math.max(-85,Math.min(85,this.rotation[1]-dy*0.25));
+        this.hideTip(); return;
+      }
+      this.hover(ox,oy);
+    });
+    c.addEventListener('pointerup',(e)=>{
+      const rect=c.getBoundingClientRect(); const ox=e.clientX-rect.left, oy=e.clientY-rect.top;
+      if(this.dragging && this.moved<6){ const r=this.regionAt(ox,oy); if(r) this.selectRegion(r.id); }
+      this.dragging=false; c.style.cursor='grab';
+    });
+  }
+
+  hover(ox,oy){
+    const r=this.regionAt(ox,oy); const tip=this.tooltipRef.current, c=this.canvasRef.current; if(!tip) return;
+    if(r){
+      c.style.cursor='pointer';
+      tip.style.display='block'; tip.style.left=ox+'px'; tip.style.top=oy+'px';
+      tip.innerHTML=`<div style="font-family:Spectral,serif;font-size:13px;color:#f0eee8">${r.name}</div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.08em;margin-top:3px;color:${r.color}">SILENCE ${r.score} / 100</div>`;
+    } else { c.style.cursor='grab'; this.hideTip(); }
+  }
+  hideTip(){ const t=this.tooltipRef.current; if(t) t.style.display='none'; }
+
+  selectRegion(id){ this.setState({ selectedId:id, panelOpen:true, mutationOpen:false }); }
+
+  coordStr(lon,lat){ return `${Math.abs(lat).toFixed(1)}°${lat>=0?'N':'S'}, ${Math.abs(lon).toFixed(1)}°${lon>=0?'E':'W'}`; }
+
+  classStyle(t){
+    if(t==='Suppression signal') return { color:'#ff6a4d', background:'rgba(255,34,0,0.08)', border:'1px solid rgba(255,60,30,0.4)' };
+    return { color:'#d8a85a', background:'rgba(196,120,0,0.07)', border:'1px solid rgba(196,120,0,0.3)' };
+  }
+
+  makeSel(raw){
+    const v=raw.coverage; const max=Math.max(3,...v);
+    const pts=v.map((d,i)=>`${(i/(v.length-1)*320).toFixed(1)},${(56-d/max*44).toFixed(1)}`).join(' ');
+    const zeros=v.filter(d=>d===0).length;
+    const tierColors=['#e0b15a','#9a9a86','#76768a'];
+    const stops=raw.mutation.stops.map((st,i)=>({
+      idx:('0'+(i+1)).slice(-2), tier:st.tier, tierColor:tierColors[i]||'#76768a', source:st.source, date:st.date,
+      segments:st.segments.map(sg=>({ text:sg.t, style: sg.m ? { color:'#e8a23a', background:'rgba(232,162,58,0.12)', padding:'0 2px', borderBottom:'1px solid rgba(232,162,58,0.45)' } : { color:'#a9a7a0' } }))
+    }));
+    return {
+      id:raw.id, name:raw.name, country:raw.country, coords:this.coordStr(raw.lon,raw.lat), color:raw.color, score:raw.score,
+      happening:raw.happening, sparkPoints:pts, coverageCaption:`Zero major-outlet stories on ${zeros} of the last 30 days`,
+      sources:raw.sources.map(s=>Object.assign({},s,{color:raw.color})),
+      classLabel:raw.classification.type, classText:raw.classification.text, classStyle:this.classStyle(raw.classification.type),
+      mutation:{ story:raw.mutation.story, stops, summary:raw.mutation.summary }
+    };
+  }
+
+  archiveLabel(){
+    const m=this.state.archiveMonths; if(m<=0) return 'Today · Jun 2026';
+    const d=new Date(2026,5,1); d.setMonth(d.getMonth()-m);
+    return d.toLocaleString('en',{month:'short',year:'numeric'});
+  }
+
+  archiveCards(){
+    return [
+      { region:'Tigray, Ethiopia', dates:'Nov 2021 – Mar 2022', color:'#e85d00', event:'Communications blackout during famine-level food insecurity across the region.', gap:'147 days of near-zero major-outlet coverage' },
+      { region:'Cabo Delgado, Mozambique', dates:'Mar 2021', color:'#c47800', event:'Assault on Palma town displaced tens of thousands within days.', gap:'11 days of zero major-outlet coverage' },
+      { region:'West Papua, Indonesia', dates:'2019', color:'#8b5e00', event:'Highlands unrest with foreign press barred for months on end.', gap:'63 days, a single international wire story' }
+    ];
+  }
+
+  renderVals(){
+    const raw=this.DB.find(r=>r.id===this.state.selectedId)||this.DB[0];
+    return {
+      canvasRef:this.canvasRef, tooltipRef:this.tooltipRef,
+      panelOpen:this.state.panelOpen, panelClosed:!this.state.panelOpen, mutationOpen:this.state.mutationOpen,
+      archiveOpen:this.state.archiveOpen, archiveClosed:!this.state.archiveOpen,
+      panelTx:this.state.panelOpen?'0%':'105%',
+      globeRight:this.state.panelOpen?'35%':'0%',
+      scrubRight:this.state.panelOpen?'35%':'0%',
+      archiveMonths:this.state.archiveMonths, archiveLabel:this.archiveLabel(), archiveCards:this.archiveCards(),
+      silences:this.DB.map(r=>({ id:r.id, name:r.name, desc:r.banner, color:r.color, onSelect:()=>this.selectRegion(r.id) })),
+      sel:this.makeSel(raw),
+      closePanel:()=>this.setState({panelOpen:false}),
+      openMutation:()=>this.setState({mutationOpen:true}),
+      closeMutation:()=>this.setState({mutationOpen:false}),
+      onScrub:(e)=>{ const v=+e.target.value; this.setState({archiveMonths:v, archiveOpen:v>0}); },
+      closeArchive:()=>this.setState({archiveMonths:0, archiveOpen:false})
+    };
+  }
+}
+</script>
+</body>
+</html>

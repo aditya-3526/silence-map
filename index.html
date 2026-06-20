@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SilenceMap — global news-silence tracker</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Spectral:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+
+    <header class="header">
+      <div class="brand">
+        <div class="brand-title">SilenceMap</div>
+        <div class="brand-sub">Global news-silence tracker</div>
+      </div>
+      <nav class="nav">
+        <span class="nav-live"><span class="live-dot"></span>Live</span>
+        <span class="nav-item">Method</span>
+        <span class="nav-item">Sources</span>
+        <span class="nav-item">About</span>
+      </nav>
+    </header>
+
+    <div class="ticker">
+      <div class="ticker-label">Today's<br>5 silences</div>
+      <div class="ticker-list" id="ticker-list"></div>
+    </div>
+
+    <div class="stage" id="stage">
+
+      <div class="globe-wrap">
+        <canvas class="globe-canvas" id="globe"></canvas>
+        <div class="tooltip" id="tooltip"></div>
+
+        <div class="legend">
+          <div class="legend-label">Silence intensity</div>
+          <div class="legend-bar">
+            <span style="background:#1a1a2e"></span>
+            <span style="background:#4a3800"></span>
+            <span style="background:#8b5e00"></span>
+            <span style="background:#c47800"></span>
+            <span style="background:#e85d00"></span>
+            <span style="background:#ff2200"></span>
+          </div>
+          <div class="legend-scale"><span>None</span><span>Suppression</span></div>
+        </div>
+
+        <div class="hint">Drag to rotate · click a pulsing marker</div>
+      </div>
+
+      <aside class="panel" id="panel"></aside>
+
+      <div class="scrub-wrap">
+        <div class="scrub-labels">
+          <span class="edge">3 yrs ago</span>
+          <span class="now" id="scrub-label">Today · Jun 2026</span>
+          <span class="edge">Today</span>
+        </div>
+        <input type="range" class="scrub" id="scrub" min="0" max="36" value="0">
+      </div>
+
+      <div class="archive" id="archive" hidden></div>
+
+      <div class="mutation" id="mutation" hidden></div>
+
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
+  <script src="data.js"></script>
+  <script src="globe.js"></script>
+  <script src="panel.js"></script>
+  <script>
+  /* ---- bootstrap: tie ticker, globe, panel, scrubber & archive together ---- */
+  (function () {
+    const stage = document.getElementById('stage');
+    const byId = REGIONS.reduce((m, r) => (m[r.id] = r, m), {});
+    let selectedId = 'tigray';
+
+    const panel = new Panel({
+      stage,
+      panel: document.getElementById('panel'),
+      mutation: document.getElementById('mutation')
+    });
+
+    function select(id) {
+      selectedId = id;
+      document.getElementById('mutation').hidden = true;
+      panel.open(byId[id]);
+    }
+
+    const globe = new Globe({
+      canvas: document.getElementById('globe'),
+      tooltip: document.getElementById('tooltip'),
+      regions: REGIONS,
+      onSelect: select,
+      getSelectedId: () => selectedId
+    });
+    globe.start();
+
+    /* ticker */
+    document.getElementById('ticker-list').innerHTML = REGIONS.map(r => `
+      <div class="ticker-item" data-id="${r.id}">
+        <div class="ticker-row">
+          <span class="ticker-dot" style="background:${r.color}"></span>
+          <span class="ticker-name">${r.name}</span>
+        </div>
+        <div class="ticker-desc">${r.banner}</div>
+      </div>`).join('');
+    document.getElementById('ticker-list').addEventListener('click', e => {
+      const item = e.target.closest('.ticker-item');
+      if (item) select(item.dataset.id);
+    });
+
+    /* archive scrubber */
+    const archive = document.getElementById('archive');
+    const scrubLabel = document.getElementById('scrub-label');
+
+    function archiveLabel(months) {
+      if (months <= 0) return 'Today · Jun 2026';
+      const d = new Date(2026, 5, 1); d.setMonth(d.getMonth() - months);
+      return d.toLocaleString('en', { month: 'short', year: 'numeric' });
+    }
+
+    function renderArchive(label) {
+      archive.innerHTML = `
+        <div class="archive-head">
+          <div class="archive-title">Notable silences · ${label}</div>
+          <button class="archive-close">Return to present ✕</button>
+        </div>
+        <div>${ARCHIVE.map(a => `
+          <div class="archive-card" style="--accent:${a.color}">
+            <div class="archive-card-top">
+              <span class="archive-region">${a.region}</span>
+              <span class="archive-dates">${a.dates}</span>
+            </div>
+            <div class="archive-event">${a.event}</div>
+            <div class="archive-gap">${a.gap}</div>
+          </div>`).join('')}</div>`;
+      archive.querySelector('.archive-close').onclick = () => {
+        scrub.value = 0; updateScrub();
+      };
+    }
+
+    const scrub = document.getElementById('scrub');
+    function updateScrub() {
+      const m = +scrub.value;
+      scrubLabel.textContent = archiveLabel(m);
+      if (m > 0) { renderArchive(archiveLabel(m)); archive.hidden = false; }
+      else { archive.hidden = true; }
+    }
+    scrub.addEventListener('input', updateScrub);
+
+    /* open the default region */
+    select(selectedId);
+  })();
+  </script>
+</body>
+</html>
