@@ -18,15 +18,15 @@
         <div class="brand-sub">Global news-silence tracker</div>
       </div>
       <nav class="nav">
-        <span class="nav-live"><span class="live-dot"></span>Live</span>
-        <span class="nav-item">Method</span>
-        <span class="nav-item">Sources</span>
-        <span class="nav-item">About</span>
+        <span class="nav-live active" data-nav="live"><span class="live-dot"></span>Live</span>
+        <span class="nav-item" data-nav="method">Method</span>
+        <span class="nav-item" data-nav="sources">Sources</span>
+        <span class="nav-item" data-nav="about">About</span>
       </nav>
     </header>
 
     <div class="ticker">
-      <div class="ticker-label">Today's<br>5 silences</div>
+      <div class="ticker-label" id="ticker-label">Today's<br>5 silences</div>
       <div class="ticker-list" id="ticker-list"></div>
     </div>
 
@@ -67,6 +67,16 @@
 
       <div class="mutation" id="mutation" hidden></div>
 
+      <div class="overlay" id="overlay" hidden>
+        <div class="overlay-sheet">
+          <div class="overlay-head">
+            <h2 class="overlay-title" id="overlay-title"></h2>
+            <button class="icon-btn lg overlay-close" id="overlay-close" aria-label="Close">✕</button>
+          </div>
+          <div class="overlay-body" id="overlay-body"></div>
+        </div>
+      </div>
+
     </div>
   </div>
 
@@ -75,12 +85,20 @@
   <script src="data.js"></script>
   <script src="globe.js"></script>
   <script src="panel.js"></script>
+  <script src="nav.js"></script>
   <script>
   /* ---- bootstrap: tie ticker, globe, panel, scrubber & archive together ---- */
   (function () {
+    const TICKER_N = 6; // how many of the highest-silence regions to show in the ticker
     const stage = document.getElementById('stage');
-    const byId = REGIONS.reduce((m, r) => (m[r.id] = r, m), {});
-    let selectedId = 'tigray';
+    const tickerList = document.getElementById('ticker-list');
+    const tickerLabel = document.getElementById('ticker-label');
+
+    let regions = REGIONS;                 // starts as the seed; the pipeline swaps it in
+    let byId = index(regions);
+    let selectedId = regions[0].id;
+
+    function index(list) { return list.reduce((m, r) => (m[r.id] = r, m), {}); }
 
     const panel = new Panel({
       stage,
@@ -88,7 +106,13 @@
       mutation: document.getElementById('mutation')
     });
 
+    /* header nav → shared overlay; LIVE returns to the globe */
+    new Nav({
+      onLive: () => { panel.close(); document.getElementById('mutation').hidden = true; }
+    });
+
     function select(id) {
+      if (!byId[id]) return;
       selectedId = id;
       document.getElementById('mutation').hidden = true;
       panel.open(byId[id]);
@@ -97,25 +121,49 @@
     const globe = new Globe({
       canvas: document.getElementById('globe'),
       tooltip: document.getElementById('tooltip'),
-      regions: REGIONS,
+      regions,
       onSelect: select,
       getSelectedId: () => selectedId
     });
     globe.start();
 
-    /* ticker */
-    document.getElementById('ticker-list').innerHTML = REGIONS.map(r => `
-      <div class="ticker-item" data-id="${r.id}">
-        <div class="ticker-row">
-          <span class="ticker-dot" style="background:${r.color}"></span>
-          <span class="ticker-name">${r.name}</span>
-        </div>
-        <div class="ticker-desc">${r.banner}</div>
-      </div>`).join('');
-    document.getElementById('ticker-list').addEventListener('click', e => {
+    /* ticker — shows the TICKER_N highest-silence regions */
+    function renderTicker() {
+      const top = regions.slice(0, TICKER_N);
+      tickerList.innerHTML = top.map(r => `
+        <div class="ticker-item" data-id="${r.id}">
+          <div class="ticker-row">
+            <span class="ticker-dot" style="background:${r.color}"></span>
+            <span class="ticker-name">${r.name}</span>
+          </div>
+          <div class="ticker-desc">${r.banner}</div>
+        </div>`).join('');
+    }
+    function setTickerLabel(html) { tickerLabel.innerHTML = html; }
+    tickerList.addEventListener('click', e => {
       const item = e.target.closest('.ticker-item');
       if (item) select(item.dataset.id);
     });
+    renderTicker();
+    setTickerLabel(`Today's<br>${regions.length} silences`);
+
+    /* ---- v2: swap in the live ACLED→GDELT pipeline once it resolves ---- */
+    function applyRegions(next) {
+      regions = next;
+      byId = index(regions);
+      globe.setRegions(regions);
+      renderTicker();
+      setTickerLabel(`Today's<br>${regions.length} silences`);
+      if (!byId[selectedId]) select(regions[0].id); // seed selection may be gone
+    }
+
+    setTickerLabel('Scanning<br>conflict zones…');
+    Pipeline.buildRegions(msg => { if (msg !== 'seed') console.log('[pipeline]', msg); })
+      .then(next => {
+        if (next && next.length && next !== REGIONS) applyRegions(next);
+        else { setTickerLabel(`Today's<br>${regions.length} silences`); console.log('[pipeline] using seed regions'); }
+      })
+      .catch(err => { console.warn('[pipeline] failed, keeping seed:', err); setTickerLabel(`Today's<br>${regions.length} silences`); });
 
     /* archive scrubber */
     const archive = document.getElementById('archive');

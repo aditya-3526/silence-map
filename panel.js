@@ -49,7 +49,8 @@ class Panel {
 
   wire() {
     this.panel.querySelector('.panel-close').onclick = () => this.close();
-    this.panel.querySelector('.trace-btn').onclick = () => this.openMutation();
+    const trace = this.panel.querySelector('.trace-btn');
+    if (trace) trace.onclick = () => this.openMutation();
   }
 
   /* ---- async: pull live coverage + sources from GDELT, then patch the DOM ---- */
@@ -126,7 +127,9 @@ class Panel {
       <section class="section">
         <div class="section-label">What other sources say</div>
         <div class="source-list">
-          ${r.sources.map(s => this.sourceCard(s, r.color)).join('')}
+          ${r.sources.length
+            ? r.sources.map(s => this.sourceCard(s, r.color)).join('')
+            : `<div class="coverage-text loading">Loading recent articles from GDELT…</div>`}
         </div>
       </section>
 
@@ -136,9 +139,9 @@ class Panel {
         <p class="class-text">${esc(r.classification.text)}</p>
       </section>
 
-      <div class="trace-wrap">
+      ${r.mutation ? `<div class="trace-wrap">
         <button class="trace-btn">Trace this story's mutation →</button>
-      </div>`;
+      </div>` : ''}`;
   }
 
   sourceCard(s, color) {

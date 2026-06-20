@@ -33,6 +33,13 @@ class Globe {
   }
   stop() { cancelAnimationFrame(this.raf); }
 
+  /* swap in a new region set (e.g. when the v2 pipeline resolves) */
+  setRegions(regions) {
+    this.regions = regions;
+    this.byCountry = {};
+    for (const r of regions) if (r.countryId) this.byCountry[r.countryId] = r;
+  }
+
   async loadWorld() {
     if (!window.d3 || !window.topojson) return;
     try {

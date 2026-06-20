@@ -1,9 +1,18 @@
-/* data.js — region database + live GDELT client
- * Exposes: window.REGIONS, window.GDELT, window.ARCHIVE
+/* data.js — dynamic region pipeline + live GDELT/ACLED clients
+ * Exposes: window.REGIONS (initial seed), window.SEED_REGIONS, window.GDELT,
+ *          window.ACLED, window.Pipeline, window.ARCHIVE, window.scoreColor
  *
- * GDELT DOC 2.0 API ( https://api.gdeltproject.org/api/v2/doc/doc ) is queried
- * directly from the browser. The static `coverage` / `sources` on each region are
- * used as an offline fallback whenever a request fails (rate limit, CORS, offline). */
+ * v2 pipeline (Pipeline.buildRegions):
+ *   1. ACLED  — pull active conflict zones: events in the last 30 days, fatalities > 0
+ *   2. aggregate events into regions (country + admin1), with fatalities + event counts
+ *   3. GDELT  — cross-reference each candidate's mainstream coverage volume
+ *   4. score  — silence = high on-the-ground severity, low coverage
+ *   5. surface the top 20 highest-silence regions automatically
+ *
+ * The 5 curated SEED_REGIONS below are the seed/fallback: shown immediately on load
+ * and kept if the ACLED pipeline fails (no key, CORS, rate limit, offline). Both the
+ * ACLED and GDELT DOC 2.0 APIs are called directly from the browser; every live call
+ * degrades to bundled data rather than breaking the UI. */
 
 /* deterministic synthetic coverage, used until / unless GDELT answers */
 function genCov(seed, peaks) {
@@ -13,7 +22,7 @@ function genCov(seed, peaks) {
   return a;
 }
 
-const REGIONS = [
+const SEED_REGIONS = [
   { id:'tigray', name:'Tigray, Ethiopia', country:'Ethiopia', countryId:'231', lon:39.2, lat:13.8, color:'#e85d00', score:94,
     query:'(Tigray OR Adigrat OR Mekelle) sourcelang:english',
     banner:'Renewed clashes displace half a million; near-total media blackout',
@@ -180,7 +189,8 @@ const GDELT = {
       const counts = this._toDaily(series.data);
       if (!counts.length) return null;
       const zeros = counts.filter(c => c === 0).length;
-      return { counts, zeros };
+      const total = counts.reduce((a, b) => a + b, 0);
+      return { counts, zeros, total };
     } catch (e) {
       console.warn('GDELT coverage fallback:', e.message);
       return null;
@@ -236,6 +246,222 @@ const GDELT = {
   }
 };
 
-window.REGIONS = REGIONS;
+/* ---- shared helpers ---- */
+
+/* legend ramp: low silence → cool/dark, high silence → red */
+const SILENCE_RAMP = ['#1a1a2e', '#4a3800', '#8b5e00', '#c47800', '#e85d00', '#ff2200'];
+function scoreColor(score) {
+  const i = Math.min(SILENCE_RAMP.length - 1, Math.max(0, Math.floor(score / 100 * SILENCE_RAMP.length)));
+  return SILENCE_RAMP[i];
+}
+
+function slugify(s) {
+  return String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'region';
+}
+
+function severityLabel(fatalities) {
+  if (fatalities >= 100) return 'Severe';
+  if (fatalities >= 25) return 'High';
+  if (fatalities >= 5) return 'Elevated';
+  return 'Reported';
+}
+
+/* run async `fn` over `items` with bounded concurrency */
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+function daysAgoISO(n) {
+  const d = new Date(); d.setDate(d.getDate() - n);
+  return d.toISOString().slice(0, 10);
+}
+
+/* ---- ACLED client ---- */
+/* The ACLED Access API needs a registered key + email (https://developer.acleddata.com).
+ * Provide them via window.SILENCEMAP_ACLED = { key, email } before this script loads,
+ * or by editing ACLED_CONFIG below. Without credentials the call fails and the pipeline
+ * falls back to the seed regions. */
+const ACLED_CONFIG = Object.assign(
+  { key: '', email: '' },
+  (typeof window !== 'undefined' && window.SILENCEMAP_ACLED) || {}
+);
+
+const ACLED = {
+  BASE: 'https://api.acleddata.com/acled/read',
+
+  configured() { return !!(ACLED_CONFIG.key && ACLED_CONFIG.email); },
+
+  /* Fetch fatal events from the last `days` days and aggregate them into conflict
+   * zones keyed by country + admin1. Returns [{ country, admin1, lat, lon,
+   * fatalities, events, topType, latestDate, latestNotes }] or null on failure. */
+  async fetchConflictZones(days = 30, maxRecords = 5000) {
+    if (!this.configured()) { console.warn('ACLED: no key/email configured — using seed regions'); return null; }
+    try {
+      const params = new URLSearchParams({
+        key: ACLED_CONFIG.key,
+        email: ACLED_CONFIG.email,
+        event_date: daysAgoISO(days) + '|' + daysAgoISO(0),
+        event_date_where: 'BETWEEN',
+        fatalities: '0',
+        fatalities_where: '>',
+        fields: 'event_date|country|admin1|latitude|longitude|fatalities|event_type|sub_event_type|notes',
+        limit: String(maxRecords)
+      });
+      const res = await fetch(this.BASE + '?' + params.toString());
+      if (!res.ok) throw new Error('ACLED ' + res.status);
+      const json = await res.json();
+      const rows = json.data || [];
+      if (!rows.length) return null;
+      return this._aggregate(rows);
+    } catch (e) {
+      console.warn('ACLED fallback:', e.message);
+      return null;
+    }
+  },
+
+  _aggregate(rows) {
+    const zones = new Map();
+    for (const r of rows) {
+      const country = r.country || 'Unknown';
+      const admin1 = r.admin1 || country;
+      const key = country + '||' + admin1;
+      const fat = Number(r.fatalities) || 0;
+      const lat = Number(r.latitude), lon = Number(r.longitude);
+      let z = zones.get(key);
+      if (!z) { z = { country, admin1, fatalities: 0, events: 0, _lat: 0, _lon: 0, _n: 0, types: {}, latestDate: '', latestNotes: '' }; zones.set(key, z); }
+      z.fatalities += fat;
+      z.events += 1;
+      if (Number.isFinite(lat) && Number.isFinite(lon)) { z._lat += lat; z._lon += lon; z._n += 1; }
+      const t = r.sub_event_type || r.event_type || 'Violence';
+      z.types[t] = (z.types[t] || 0) + 1;
+      if (!z.latestDate || r.event_date > z.latestDate) { z.latestDate = r.event_date; z.latestNotes = r.notes || ''; }
+    }
+    return [...zones.values()].map(z => ({
+      country: z.country, admin1: z.admin1,
+      lat: z._n ? z._lat / z._n : 0, lon: z._n ? z._lon / z._n : 0,
+      fatalities: z.fatalities, events: z.events,
+      topType: Object.entries(z.types).sort((a, b) => b[1] - a[1])[0][0],
+      latestDate: z.latestDate, latestNotes: z.latestNotes
+    }));
+  }
+};
+
+/* ---- the v2 pipeline ---- */
+const Pipeline = {
+  CANDIDATES: 35,   // how many top-severity zones to cross-reference against GDELT
+  TOP_N: 20,        // how many highest-silence regions to surface
+  GDELT_CONCURRENCY: 4,
+
+  /* Build the live region list. Resolves to an array of region objects shaped like
+   * SEED_REGIONS, or SEED_REGIONS itself if the pipeline can't run. */
+  async buildRegions(onProgress = () => {}) {
+    onProgress('Scanning ACLED for active conflict zones…');
+    const zones = await ACLED.fetchConflictZones(30);
+    if (!zones || !zones.length) { onProgress('seed'); return SEED_REGIONS; }
+
+    // most-severe zones first; only cross-reference the top slice against GDELT
+    zones.sort((a, b) => b.fatalities - a.fatalities || b.events - a.events);
+    const candidates = zones.slice(0, this.CANDIDATES);
+
+    onProgress(`Cross-referencing coverage for ${candidates.length} zones…`);
+    const coverage = await mapLimit(candidates, this.GDELT_CONCURRENCY, async (z) => {
+      const cov = await GDELT.fetchCoverage(this.queryFor(z));
+      return cov || { counts: [], zeros: 30, total: 0 };
+    });
+
+    // normalize severity and coverage across the candidate pool (log-scaled so a
+    // single mega-conflict doesn't flatten everything else)
+    const maxFatLog = Math.log1p(Math.max(...candidates.map(z => z.fatalities), 1));
+    const maxCovLog = Math.log1p(Math.max(...coverage.map(c => c.total), 1));
+
+    const scored = candidates.map((z, i) => {
+      const cov = coverage[i];
+      const sevNorm = Math.log1p(z.fatalities) / maxFatLog;
+      const covNorm = maxCovLog > 0 ? Math.log1p(cov.total) / maxCovLog : 0;
+      // severe AND under-covered → high silence; either alone → low
+      const score = Math.round(100 * sevNorm * (1 - covNorm));
+      return { zone: z, cov, score };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    const top = scored.slice(0, this.TOP_N);
+    onProgress(`Surfaced ${top.length} highest-silence regions`);
+    return top.map(s => this.toRegion(s));
+  },
+
+  queryFor(z) {
+    // articles mentioning both the admin1 region and its country (space = AND in GDELT)
+    return `"${z.admin1}" "${z.country}" sourcelang:english`;
+  },
+
+  toRegion({ zone, cov, score }) {
+    const color = scoreColor(score);
+    const counts = cov.counts.length ? cov.counts : genCov(zone.fatalities % 30, []);
+    return {
+      id: slugify(zone.country + '-' + zone.admin1),
+      name: `${zone.admin1}, ${zone.country}`,
+      country: zone.country,
+      countryId: null,            // dynamic zones aren't matched to topojson land tint
+      lon: zone.lon, lat: zone.lat,
+      color, score,
+      query: this.queryFor(zone),
+      banner: `${zone.fatalities} reported fatalities across ${zone.events} events · coverage volume ${cov.total}`,
+      happening: {
+        type: zone.topType,
+        severity: severityLabel(zone.fatalities),
+        population: `${zone.events} violent events · ${zone.fatalities} fatalities (30d)`,
+        summary: zone.latestNotes
+          ? zone.latestNotes.slice(0, 320)
+          : `ACLED logged ${zone.events} fatal events in ${zone.admin1} over the last 30 days, with ${zone.fatalities} reported fatalities. Most recent activity: ${zone.topType}.`,
+        sources: ['ACLED', 'GDELT']
+      },
+      coverage: counts,
+      sources: [],                // filled live by Panel.enrich via GDELT artlist
+      classification: {
+        type: 'Coverage gap',
+        text: `This region scores ${score}/100 because ACLED records substantial fatal violence (${zone.fatalities} fatalities, ${zone.events} events in 30 days) while GDELT shows only ${cov.total} mainstream articles mentioning it. The score measures that divergence; it does not, on its own, establish the cause — structural access, editorial choice, and active suppression all produce the same gap.`
+      },
+      mutation: null,             // no curated mutation trace for auto-generated regions
+      dynamic: true
+    };
+  }
+};
+
+/* ---- static content for the nav modals ---- */
+const REPO_URL = 'https://github.com/aditya-3526/silence-map';
+
+const DATA_SOURCES = [
+  { name: 'ACLED', url: 'https://acleddata.com',
+    provides: 'Geolocated armed-conflict & political-violence events — the severity numerator', status: 'Live · pipeline' },
+  { name: 'GDELT DOC 2.0', url: 'https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/',
+    provides: 'Coverage-volume timeline & recent article lists — the coverage denominator', status: 'Live' },
+  { name: 'GDACS', url: 'https://www.gdacs.org',
+    provides: 'Global disaster alerts corroborating sudden-onset events', status: 'Seed provenance' },
+  { name: 'ReliefWeb', url: 'https://reliefweb.int',
+    provides: 'Humanitarian situation reports & flash updates', status: 'Seed provenance' },
+  { name: 'OCHA', url: 'https://www.unocha.org',
+    provides: 'UN displacement & access figures', status: 'Seed provenance' }
+];
+
+const ABOUT_TEXT = `SilenceMap is a global news-silence tracker. It treats the gap between how much fatal violence is verifiably happening in a place and how much the mainstream press covers it as a signal in its own right — surfacing, on an interactive globe, the regions where major events unfold in near-darkness. Active conflict zones are pulled live from ACLED, cross-referenced against GDELT coverage volume, scored for silence, and ranked automatically, with five curated regions as the seed and fallback. The silence is the story.`;
+
+window.SEED_REGIONS = SEED_REGIONS;
+window.REGIONS = SEED_REGIONS;   // initial render uses the seed; pipeline replaces it
 window.ARCHIVE = ARCHIVE;
 window.GDELT = GDELT;
+window.ACLED = ACLED;
+window.Pipeline = Pipeline;
+window.scoreColor = scoreColor;
+window.DATA_SOURCES = DATA_SOURCES;
+window.ABOUT_TEXT = ABOUT_TEXT;
+window.REPO_URL = REPO_URL;
